@@ -9,6 +9,8 @@ let view = { minX: 0, minY: 0, maxX: 0, maxY: 0, cell: 20 };
 let cellData = new Map();   // "x,y" -> {before, after}
 let rect = null;             // 当前框选 {x0,y0,x1,y1} (格坐标, 闭区间)
 let drag = null;             // 拖选状态
+let exRect = null;           // 导出选区 {x0,y0,x1,y1} (米, 8 米格线, 半开区间)
+let exDrag = null;           // 导出选区拖选起点
 
 async function api(path, opts) {
   const resp = await fetch(path, opts);
@@ -142,6 +144,17 @@ function draw() {
     ctx.fillRect(px(r.x0), py(r.y0), rw, rh);
     ctx.strokeRect(px(r.x0), py(r.y0), rw, rh);
   }
+
+  // 导出选区 (8 米格线, 半开区间, 坐标即米)
+  if (exRect) {
+    const r = normalize(exRect);
+    ctx.fillStyle = "rgba(134,239,172,.30)";
+    ctx.strokeStyle = "#15803d";
+    ctx.lineWidth = 2;
+    const rw = (r.x1 - r.x0) * cell, rh = (r.y1 - r.y0) * cell;
+    ctx.fillRect(px(r.x0), py(r.y0), rw, rh);
+    ctx.strokeRect(px(r.x0), py(r.y0), rw, rh);
+  }
 }
 
 function normalize(r) {
@@ -162,7 +175,28 @@ function eventCell(ev) {
   return { x, y };
 }
 
+/* 连续格线坐标 (米), 供 8 米格线吸附 */
+function eventLine(ev) {
+  const box = canvas.getBoundingClientRect();
+  const sx = canvas.width / box.width, sy = canvas.height / box.height;
+  const cx = (ev.clientX - box.left) * sx - 20;
+  const cy = (ev.clientY - box.top) * sy - 20;
+  return {
+    x: view.minX + Math.round(cx / view.cell),
+    y: view.minY + Math.round(cy / view.cell),
+  };
+}
+const snap8 = (v) => Math.round(v / 8) * 8;
+
 canvas.addEventListener("mousedown", (ev) => {
+  if ($("snap8").checked) {
+    const l = eventLine(ev);
+    exDrag = { x: snap8(l.x), y: snap8(l.y) };
+    exRect = { x0: exDrag.x, y0: exDrag.y, x1: exDrag.x, y1: exDrag.y };
+    syncExInputs();
+    draw();
+    return;
+  }
   const c = eventCell(ev);
   if (c.x < view.minX || c.x > view.maxX || c.y < view.minY || c.y > view.maxY) return;
   drag = { x0: c.x, y0: c.y };
@@ -170,13 +204,20 @@ canvas.addEventListener("mousedown", (ev) => {
   draw();
 });
 canvas.addEventListener("mousemove", (ev) => {
+  if (exDrag) {
+    const l = eventLine(ev);
+    exRect = { x0: exDrag.x, y0: exDrag.y, x1: snap8(l.x), y1: snap8(l.y) };
+    syncExInputs();
+    draw();
+    return;
+  }
   if (!drag) return;
   const c = eventCell(ev);
   rect = { x0: drag.x0, y0: drag.y0, x1: c.x, y1: c.y };
   syncRectInputs();
   draw();
 });
-window.addEventListener("mouseup", () => { drag = null; });
+window.addEventListener("mouseup", () => { drag = null; exDrag = null; });
 
 function syncRectInputs() {
   if (!rect) return;
@@ -225,6 +266,78 @@ $("btn-clear").addEventListener("click", () => {
   rect = null; draw();
   ["r-x0", "r-y0", "r-x1", "r-y1"].forEach((id) => ($(id).value = ""));
   setMsg("sel-msg", "", "mut");
+});
+
+/* ---------------- 浅点筛查图导出 (GeoTIFF) ---------------- */
+function syncExInputs() {
+  if (!exRect) return;
+  const r = normalize(exRect);
+  $("e-x0").value = r.x0; $("e-y0").value = r.y0;
+  $("e-x1").value = r.x1; $("e-y1").value = r.y1;
+}
+
+$("btn-export").addEventListener("click", async () => {
+  const body = {
+    x0: Number($("e-x0").value), y0: Number($("e-y0").value),
+    x1: Number($("e-x1").value), y1: Number($("e-y1").value),
+  };
+  if (Object.values(body).some((v) => Number.isNaN(v))) {
+    setMsg("ex-msg", "请拖选或填写完整的 8 米格线坐标 (米)", "err");
+    return;
+  }
+  if (Object.values(body).some((v) => v % 8 !== 0)) {
+    setMsg("ex-msg", "坐标必须是 8 的整数倍 (沿 8 米格线)", "err");
+    return;
+  }
+  $("btn-export").disabled = true;
+  $("ex-link").innerHTML = "";
+  try {
+    const job = await api("/api/exports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setMsg("ex-msg", `任务 ${job.id} 已创建, 正在生成…`, "mut");
+    pollExport(job.id);
+  } catch (e) {
+    setMsg("ex-msg", "创建导出失败: " + e.message, "err");
+    $("btn-export").disabled = false;
+  }
+});
+
+async function pollExport(id) {
+  try {
+    const j = await api("/api/exports/" + id);
+    if (j.status === "done") {
+      const kb = (j.file_bytes / 1024).toFixed(0);
+      setMsg(
+        "ex-msg",
+        `完成: ${j.width_px}×${j.height_px} 像元, 有效像元 ${j.valid_pixels}, `
+        + `数据版本 v${j.data_version}, 文件 ${kb} KB `
+        + `(瓦片 ${j.tiles_total} 个, 含像元数据的瓦片已写入)`,
+        "ok"
+      );
+      $("ex-link").innerHTML =
+        `<a href="/api/exports/${id}/file">下载 ${j.file_name}</a>`;
+      $("btn-export").disabled = false;
+    } else if (j.status === "failed") {
+      setMsg("ex-msg", "生成失败 (残件已清理): " + j.error, "err");
+      $("btn-export").disabled = false;
+    } else {
+      setMsg("ex-msg", `生成中… 瓦片 ${j.tiles_done}/${j.tiles_total}`, "mut");
+      setTimeout(() => pollExport(id), 800);
+    }
+  } catch (e) {
+    setMsg("ex-msg", "查询导出状态失败: " + e.message, "err");
+    $("btn-export").disabled = false;
+  }
+}
+
+$("btn-exclear").addEventListener("click", () => {
+  exRect = null; draw();
+  ["e-x0", "e-y0", "e-x1", "e-y1"].forEach((id) => ($(id).value = ""));
+  setMsg("ex-msg", "", "mut");
+  $("ex-link").innerHTML = "";
 });
 
 /* ---------------- 批次留痕 ---------------- */

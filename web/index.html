@@ -88,6 +88,30 @@
     </div>
 
     <div class="card">
+      <h2>③ 浅点筛查图导出（GeoTIFF）</h2>
+      <p class="mut" style="margin:4px 0 8px;font-size:12px">
+        勾选“对齐 8 米格线”后在画布拖选（绿框），或直接输入 8 的整数倍坐标（米）。
+        每像元汇总 8×8 后测细格：波段1 最浅有效水深(cm)，波段2 有效细格数；
+        无有效水深的像元两波段均为 NoData。
+      </p>
+      <label style="font-size:12px">
+        <input type="checkbox" id="snap8" /> 拖选对齐 8 米格线
+      </label>
+      <div class="kv" style="margin-top:6px">
+        <b>x0 (m)</b><input id="e-x0" type="number" step="8" />
+        <b>y0 (m)</b><input id="e-y0" type="number" step="8" />
+        <b>x1 (m)</b><input id="e-x1" type="number" step="8" />
+        <b>y1 (m)</b><input id="e-y1" type="number" step="8" />
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px">
+        <button id="btn-export">生成 GeoTIFF</button>
+        <button id="btn-exclear" class="secondary">清除</button>
+      </div>
+      <div id="ex-msg" class="msg"></div>
+      <div id="ex-link" class="msg"></div>
+    </div>
+
+    <div class="card">
       <h2>核量结果</h2>
       <div class="kv" id="result">
         <b>两期共测面积</b><span class="num" id="r-area">—</span>
@@ -123,6 +147,7 @@
         <span><span class="sw" style="background:#1d4ed8"></span>回淤</span>
         <span><span class="sw" style="background:#94a3b8"></span>空水深</span>
         <span><span class="sw" style="background:#fde68a"></span>框选区</span>
+        <span><span class="sw" style="background:#86efac"></span>导出选区(8米)</span>
         <span>粗线为块边界（<span id="bsize">16</span>×<span id="bsize2">16</span> 格）</span>
       </div>
     </div>

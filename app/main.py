@@ -1,4 +1,4 @@
-"""FastAPI 入口: 上传两期测深 CSV、选区核量、状态查询与静态网页。"""
+"""FastAPI 入口: 上传两期测深 CSV、选区核量、浅点筛查图导出与静态网页。"""
 
 from __future__ import annotations
 
@@ -10,13 +10,24 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import config
 from .database import connect, get_data_version, init_db
+from .export import (
+    ExportError,
+    ExportManager,
+    ensure_export_dir,
+    export_dir,
+    sweep_tmp_files,
+    validate_selection,
+)
 from .ingest import IngestError, ingest_batch, parse_csv, record_rejection
 from .query import QueryError, select_rectangle
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
+
+export_manager = ExportManager()
 
 
 @asynccontextmanager
@@ -24,13 +35,16 @@ async def lifespan(app: FastAPI):
     conn = connect()
     init_db(conn)
     conn.close()
+    # 清理上次进程可能遗留的导出残件 (崩溃时未删的临时文件)
+    sweep_tmp_files(export_dir())
     yield
 
 
 app = FastAPI(
     title="港池疏浚验收计量服务",
-    version="1.0.0",
-    description="上传前后两期测深 CSV, 按格线矩形核量两期共测面积与净挖方。",
+    version="1.1.0",
+    description="上传前后两期测深 CSV, 按格线矩形核量两期共测面积与净挖方, "
+    "并按 8 米格线导出浅点筛查 GeoTIFF。",
     lifespan=lifespan,
 )
 
@@ -182,6 +196,57 @@ def batches(limit: int = Query(50, ge=1, le=500)) -> dict:
         return {"batches": [dict(r) for r in rows]}
     finally:
         conn.close()
+
+
+class ExportRequest(BaseModel):
+    """浅点筛查图导出选区: 8 米格线坐标 (米), 半开区间 [x0,x1) x [y0,y1)。"""
+
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+
+
+@app.post("/api/exports", status_code=202)
+def create_export(body: ExportRequest) -> dict:
+    """创建浅点筛查图导出任务: 后台生成双波段 GeoTIFF, 轮询获取状态。"""
+    try:
+        sel = validate_selection(body.x0, body.y0, body.x1, body.y1)
+    except ExportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = export_manager.start(sel, ensure_export_dir(export_dir()))
+    return job.to_dict()
+
+
+@app.get("/api/exports")
+def list_exports() -> dict:
+    """本次进程内的导出任务列表 (新的在前)。"""
+    return {"exports": [j.to_dict() for j in export_manager.list()]}
+
+
+@app.get("/api/exports/{job_id}")
+def export_status(job_id: str) -> dict:
+    """导出任务状态: running / done / failed, 含数据版本与进度。"""
+    job = export_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+    return job.to_dict()
+
+
+@app.get("/api/exports/{job_id}/file")
+def export_file(job_id: str) -> FileResponse:
+    """下载写完的 GeoTIFF; 只有生成完成的文件才提供。"""
+    job = export_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+    if job.status != "done" or not job.file_name:
+        raise HTTPException(
+            status_code=409, detail=f"导出未完成 (状态 {job.status}), 暂无可下载文件"
+        )
+    path = export_dir() / job.file_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="导出文件已被清理")
+    return FileResponse(path, media_type="image/tiff", filename=job.file_name)
 
 
 @app.get("/")

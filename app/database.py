@@ -34,6 +34,11 @@ def _resolve_db_path(db_path: Path | str | None) -> Path:
     return Path(raw) if raw else config.DB_PATH
 
 
+def resolved_db_path(db_path: Path | str | None = None) -> Path:
+    """返回实际生效的数据库文件路径 (解析 DB_PATH 环境变量)。"""
+    return _resolve_db_path(db_path)
+
+
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     """打开一个配置好的连接 (每个请求/线程独立连接)。"""
     path = _resolve_db_path(db_path)

@@ -10,6 +10,9 @@ services:
       BLOCK_SIZE: "16"
       BUSY_TIMEOUT_S: "10"
       DB_PATH: "/data/dredging.db"
+      # 浅点筛查图 GeoTIFF 导出目录与选区单边上限 (米)
+      EXPORT_DIR: "/data/exports"
+      EXPORT_MAX_SIDE_M: "65536"
     volumes:
       - dredging-data:/data
     restart: unless-stopped

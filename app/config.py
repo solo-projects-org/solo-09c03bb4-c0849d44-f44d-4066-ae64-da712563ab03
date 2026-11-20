@@ -32,3 +32,6 @@ MAX_ROWS_PER_BATCH: int = _int_env("MAX_ROWS_PER_BATCH", 5_000_000)
 # 单格深度合理范围 (厘米), 仅做输入校验, 不参与计量
 MIN_DEPTH_CM: int = _int_env("MIN_DEPTH_CM", 0)
 MAX_DEPTH_CM: int = _int_env("MAX_DEPTH_CM", 100_000)
+
+# 浅点筛查图导出: 选区单边最大长度 (米), 像元 8 米 -> 最大 8192 x 8192 像元
+EXPORT_MAX_SIDE_M: int = _int_env("EXPORT_MAX_SIDE_M", 65536)
